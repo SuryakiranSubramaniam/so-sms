@@ -1,0 +1,107 @@
+<assembly
+	xmlns="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.3"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xsi:schemaLocation="http://maven.apache.org/plugins/maven-assembly-plugin/assembly/1.1.3 http://maven.apache.org/xsd/assembly-1.1.3.xsd">
+	<id>exec</id>
+
+	<formats>
+		<format>dir</format>
+	</formats>
+
+	<includeBaseDirectory>false</includeBaseDirectory>
+
+	<dependencySets>
+		<dependencySet>
+			<outputDirectory>lib</outputDirectory>
+			<useProjectArtifact>false</useProjectArtifact>
+			<unpack>false</unpack>
+		</dependencySet>
+		<dependencySet>
+			<!-- the jar for project is kept in separate directory, it helps in deployment -->
+			<outputDirectory>flow</outputDirectory>
+			<useProjectArtifact>true</useProjectArtifact>
+			<unpack>false</unpack>
+			<includes>
+				<include>${project.groupId}:${project.artifactId}</include>
+			</includes>
+		</dependencySet>
+	</dependencySets>
+
+	<fileSets>
+		<fileSet>
+			<useDefaultExcludes>true</useDefaultExcludes>
+			<outputDirectory>log</outputDirectory>
+			<directory>src/shell</directory>
+			<excludes>
+				<exclude>*/**</exclude>
+			</excludes>
+		</fileSet>
+		<fileSet>
+			<useDefaultExcludes>true</useDefaultExcludes>
+			<outputDirectory>src/log/archive</outputDirectory>
+			<directory>shell</directory>
+			<excludes>
+				<exclude>*/**</exclude>
+			</excludes>
+		</fileSet>
+		<fileSet>
+			<!-- actually not needed, but still may be useful -->
+			<useDefaultExcludes>true</useDefaultExcludes>
+			<outputDirectory>tmp</outputDirectory>
+			<directory>src/shell</directory>
+			<excludes>
+				<exclude>*/**</exclude>
+			</excludes>
+		</fileSet>
+		<fileSet>
+			<!-- actually not needed, but still may be useful -->
+			<useDefaultExcludes>true</useDefaultExcludes>
+			<outputDirectory>conf/templates</outputDirectory>
+			<directory>src/conf/templates</directory>
+			<includes>
+				<include>*/**</include>
+			</includes>
+		</fileSet>
+	</fileSets>
+
+	<files>
+		<file>
+			<source>src/conf/handler.properties</source>
+			<outputDirectory>conf</outputDirectory>
+			<destName>${project.artifactId}.properties</destName>
+			<filtered>true</filtered>
+		</file>
+		<file>
+			<source>src/conf/logback.xml</source>
+			<outputDirectory>conf</outputDirectory>
+			<destName>${project.artifactId}-logback.xml</destName>
+			<filtered>true</filtered>
+		</file>
+		<file>
+			<source>src/conf/handler-routes.xml</source>
+			<outputDirectory>conf</outputDirectory>
+			<destName>${project.artifactId}-routes.xml</destName>
+			<filtered>true</filtered>
+		</file>
+		<file>
+			<source>src/conf/jmx_export.yaml</source>
+			<outputDirectory>conf</outputDirectory>
+			<destName>jmx_export.yaml</destName>
+			<filtered>true</filtered>
+		</file>
+		<file>
+			<source>src/shell/handler.sh</source>
+			<outputDirectory>bin</outputDirectory>
+			<destName>${project.artifactId}.sh</destName>
+			<fileMode>777</fileMode>
+			<filtered>true</filtered>
+		</file>
+		<file>
+			<source>src/conf/secret.properties</source>
+			<outputDirectory>conf</outputDirectory>
+			<destName>secret.properties</destName>
+			<fileMode>777</fileMode>
+			<filtered>true</filtered>
+		</file>
+	</files>
+</assembly>

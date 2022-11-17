@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Configures the Camel Context -->
+
+<!-- /* * Copyright (c) 2015, KNOWESIS PTE LTD. All rights reserved. * KNOWESIS 
+	PTE LTD. PROPRIETARY/CONFIDENTIAL. Use is subject to license terms. */ /* 
+	* * @author KNOWESIS SIFT ORCHESTRATOR DEVELOPMENT TEAM * */ -->
+
+
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:camel="http://camel.apache.org/schema/spring"
+	xsi:schemaLocation="
+       http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+       http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd">
+
+	<bean id="properties"
+		class="org.springframework.beans.factory.config.PropertyPlaceholderConfigurer">
+		<property name="locations"
+			value="file:${CONFIG_HOME}/sfmc-smshandler.properties" />
+	</bean>
+	
+	<bean id="jasypt" class="org.apache.camel.component.jasypt.JasyptPropertiesParser">
+	    <property name="algorithm" value="PBEWITHMD5ANDDES" />
+        <property name="password" value="sysenv:CAMEL_ENCRYPTION_PASSWORD" />
+    </bean>
+	
+	<bean class="org.springframework.context.annotation.CommonAnnotationBeanPostProcessor" />
+	<bean id="sfmcMessagingProcessor" class="com.knowesis.sift.orchestrator.SFMCMessagingProcessor" />
+	<bean id="ingestDEProcessor" class="com.knowesis.sift.orchestrator.IngestionProcessor"/>
+	<bean id="authToken" class="com.knowesis.sift.orchestrator.domain.AuthToken" />
+	<bean id="aggregatorStrategy" class="com.knowesis.sift.orchestrator.MessageAggregationStrategy" />
+	<import resource="file:${CONFIG_HOME}/sfmc-smshandler-routes.xml" />
+
+</beans>

@@ -1,0 +1,124 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+
+<configuration scan="true" debug="true">
+
+    <!-- as such logback do not define a dtd or xsd -->
+
+    <!-- ===================== DO NOT MODIFY ====================== -->
+    <property scope="context" name="logLevel" value="${SO_LOG_LEVEL}" />
+    <property scope="context" name="defaultAppender" value="${LOG_TARGET}" />
+    <property scope="context" name="logfile" value="sfmc-smshandler.log" />
+    <property scope="context" name="performancefile" value="sfmc-smshandler-performance.log" />
+
+    <appender name="file" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_HOME}/${logfile}</file>
+        <append>true</append>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <!-- rollover daily -->
+            <fileNamePattern>${LOG_HOME}/archive/${logfile}-%d{yyyy-MM-dd}_%i.zip</fileNamePattern>
+            <maxHistory>25</maxHistory>
+            <timeBasedFileNamingAndTriggeringPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+                <!-- or whenever the file size reaches 100MB -->
+                <maxFileSize>50MB</maxFileSize>
+            </timeBasedFileNamingAndTriggeringPolicy>
+        </rollingPolicy>
+        <layout>
+            <pattern>[%date{MM/dd/yy HH:mm:ss:SSS}] %-18.-18logger{0} %highlight(%.-1level) [%-30.30X{camel.routeId}] [%cyan(%-20.20X{camel.breadcrumbId})]- %message %n%red(%rEx{12}%nopex)</pattern>
+        </layout>
+    </appender>
+
+   <appender name="elastic" class="com.internetitem.logback.elasticsearch.ElasticsearchAppender">
+		<url>${ELASTICSEARCH_URL}</url>
+		<index>${ELASTICSEARCH_SIFT_LOGS_INDEX}</index>
+		<type>so-log</type>
+		<errorLoggerName>es-error-logger</errorLoggerName>
+		<connectTimeout>30000</connectTimeout>
+		<errorsToStderr>false</errorsToStderr>
+		<includeCallerData>false</includeCallerData>
+		<logsToStderr>false</logsToStderr>
+		<maxQueueSize>104857600</maxQueueSize>
+		<maxRetries>3</maxRetries>
+		<readTimeout>30000</readTimeout>
+		<sleepTime>250</sleepTime>
+		<rawJsonMessage>false</rawJsonMessage>
+		<includeMdc>true</includeMdc> <!-- optional (default false) -->
+		<!-- <maxMessageSize>-1</maxMessageSize> --> <!-- optional (default -1 -->
+		<!-- <authentication class="com.internetitem.logback.elasticsearch.config.BasicAuthentication"
+			/> optional -->
+		<properties>
+			<property>
+				<name>host</name>
+				<value>${HOSTNAME}</value>
+				<allowEmpty>false</allowEmpty>
+			</property>
+			<property>
+				<name>severity</name>
+				<value>%level</value>
+			</property>
+			<property>
+				<name>logger</name>
+				<value>%logger</value>
+			</property>
+			<property>
+				<name>container_id</name>
+				<value>${CONTAINER_ID}</value>
+			</property>
+		</properties>
+		<headers>
+			<header>
+				<name>Content-Type</name>
+				<value>application/json</value>
+			</header>
+		</headers>
+	</appender>
+
+    <appender name="perf" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <file>${LOG_HOME}/${performancefile}</file>
+        <append>true</append>
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <!-- rollover daily -->
+            <fileNamePattern>${LOG_HOME}/archive/${performancefile}-%d{yyyy-MM-dd}_%i.zip</fileNamePattern>
+            <maxHistory>25</maxHistory>
+            <timeBasedFileNamingAndTriggeringPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedFNATP">
+                <!-- or whenever the file size reaches 100MB -->
+                <maxFileSize>50MB</maxFileSize>
+            </timeBasedFileNamingAndTriggeringPolicy>
+        </rollingPolicy>
+        <layout>
+            <pattern>[%date{MM/dd/yy HH:mm:ss:SSS}] %-18.-18logger{0} - %message %n%red(%rEx{12}%nopex)</pattern>
+        </layout>
+    </appender>
+
+    <appender name="stdout" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>[%date{MM/dd/yy HH:mm:ss:SSS}] [%thread] %-18.-18logger{0} %.-1level %message %n%xThrowable{12}
+            </pattern>
+        </encoder>
+    </appender>
+
+    <logger name="org.apache" additivity="false" level="info">
+        <immediateFlush>false</immediateFlush>
+        <appender-ref ref="${defaultAppender}" />
+    </logger>
+
+    <logger name="com.knowesis.sift.orchestrator.processor.PerformanceStaticsProcessor" additivity="false" level="${logLevel}">
+        <immediateFlush>false</immediateFlush>
+        <appender-ref ref="perf" />
+    </logger>
+
+    <logger name="org.apache.camel.component.metrics.MetricsComponent" additivity="false" level="${logLevel}">
+        <immediateFlush>false</immediateFlush>
+        <appender-ref ref="perf" />
+    </logger>
+
+    <logger name="com.knowesis" additivity="false" level="${logLevel}">
+        <immediateFlush>false</immediateFlush>
+        <appender-ref ref="${defaultAppender}" />
+    </logger>
+
+    <root level="${logLevel}">
+        <immediateFlush>false</immediateFlush>
+        <appender-ref ref="${defaultAppender}" />
+    </root>
+</configuration>
+	

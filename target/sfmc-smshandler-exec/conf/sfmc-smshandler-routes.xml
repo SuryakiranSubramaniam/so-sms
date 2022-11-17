@@ -1,0 +1,500 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<beans xmlns="http://www.springframework.org/schema/beans"
+	xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+	xmlns:camel="http://camel.apache.org/schema/spring"
+	xsi:schemaLocation="
+       http://www.springframework.org/schema/beans http://www.springframework.org/schema/beans/spring-beans.xsd
+       http://camel.apache.org/schema/spring http://camel.apache.org/schema/spring/camel-spring.xsd">
+
+	<camel:camelContext streamCache="true">
+
+		<camel:propertyPlaceholder
+			id="propertyConfigurer" propertiesParserRef="jasypt">
+			<camel:propertiesLocation resolver="file"
+				path="${CONFIG_HOME}/sfmc-smshandler.properties" />
+			<!-- <camel:propertiesLocation resolver="file"
+				path="${env:SECRETS_PATH}" /> -->
+		</camel:propertyPlaceholder>
+
+		<camel:dataFormats>
+			<camel:json id="json" library="Jackson" />
+		</camel:dataFormats>
+
+		<!-- 1. This route accepts input (JSON) from Kafka topic 2. Stores the 
+			JSON in property called OriginalMessage 3. Check if isControl is null or 
+			false, if yes proceed to step 3.1 3.1 Whitelisting functionality enabled, 
+			SMS request(forwarded to contactPolicyCheckRoute) is proceeded only for the 
+			2 cases 3.1.1 so.whitelisting.enable = true and msisdn in so.white.listed.numbers 
+			3.1.2 so.whitelisting.enable = false 4. Otherwise Not processing any control 
+			group messages -->
+		<camel:route id="inputRoute" startupOrder="4">
+			<camel:from
+				uri="kafka:{{env:SO_SMS_INPUT_TOPIC}}?brokers={{env:SIFT_QUEUES}}&amp;autoOffsetReset={{env:AUTO_OFFSET_RESET}}&amp;groupId={{env:GROUP_ID}}&amp;maxPollIntervalMs={{env:MAX_POLL_INTERVAL_MS_CONFIG}}&amp;maxPollRecords={{env:MAX_POLL_RECORDS_CONFIG}}" />
+			<camel:log loggingLevel="INFO"
+				message="SMS Message received: ${body}" />
+			<camel:unmarshal ref="json" />
+			<camel:bean ref="sfmcMessagingProcessor"
+				id="updateTrigger" method="updateTrigger" />
+			<camel:log loggingLevel="DEBUG" message="SMS Message after adding countryCode and Message Transformation : ${body}" />
+			<camel:marshal ref="json" />
+			<camel:convertBodyTo type="String" />
+			<camel:setProperty propertyName="OriginalMessage">
+				<camel:simple>${body}</camel:simple>
+			</camel:setProperty>
+			<camel:unmarshal ref="json" />
+			<camel:choice>
+				<camel:when>
+					<camel:simple>${body[notificationMsg]} == null || ${body[notificationMsg]} == ''</camel:simple>
+					<camel:choice>
+						<camel:when>
+							<camel:simple>${body[action]} == 'CORENOTIFICATION'</camel:simple>
+							<camel:log loggingLevel="INFO" message="Not Processing - notificationMsg is null and action = CORENOTIFICATION" />
+						</camel:when>
+						<camel:otherwise>
+						<camel:choice>
+							<camel:when>
+								<camel:simple>${body[isControl]} == false || ${body[isSimulated]} == false</camel:simple>
+								<camel:choice>
+									<camel:when>
+										<camel:simple>{{env:SO_WHITELISTING_ENABLE}} == "false"</camel:simple>
+										<camel:to uri="seda:contactPolicyCheck?size={{env:SEDA_CONTACT_POLICY_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+									</camel:when>
+									<camel:when>
+										<camel:simple>{{env:SO_WHITELISTING_ENABLE}} == "true" and ${headers[Mobile_Number]} in {{env:SO_WHITE_LISTED_NUMBERS}}</camel:simple>
+										<camel:to uri="seda:contactPolicyCheck?size={{env:SEDA_CONTACT_POLICY_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+									</camel:when>
+									<camel:otherwise>
+										<camel:log loggingLevel="INFO" message="Non white-listed number : msisdn -> ${headers[Mobile_Number]}"></camel:log>
+									</camel:otherwise>
+								</camel:choice>
+							</camel:when>
+							<camel:otherwise>
+								<camel:log loggingLevel="INFO" message="Not Processing - Control Group Message Or Simulated Flow" />
+							</camel:otherwise>
+						</camel:choice>
+						</camel:otherwise>
+					</camel:choice>
+				</camel:when>
+				<camel:otherwise>
+					<camel:choice>
+						<camel:when>
+							<camel:simple>${body[isControl]} == false || ${body[isSimulated]} == false</camel:simple>
+							<camel:choice>
+								<camel:when>
+									<camel:simple>{{env:SO_WHITELISTING_ENABLE}} == "false"</camel:simple>
+									<camel:to uri="seda:contactPolicyCheck?size={{env:SEDA_CONTACT_POLICY_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+								</camel:when>
+								<camel:when>
+									<camel:simple>{{env:SO_WHITELISTING_ENABLE}} == "true" and ${headers[Mobile_Number]} in {{env:SO_WHITE_LISTED_NUMBERS}}</camel:simple>
+									<camel:to uri="seda:contactPolicyCheck?size={{env:SEDA_CONTACT_POLICY_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+								</camel:when>
+								<camel:otherwise>
+									<camel:log loggingLevel="INFO" message="Non white-listed number : msisdn -> ${headers[Mobile_Number]}"></camel:log>
+								</camel:otherwise>
+							</camel:choice>
+						</camel:when>
+						<camel:otherwise>
+							<camel:log loggingLevel="WARN" message="Not Processing - Control Group Message Or Simulated Flow" />
+						</camel:otherwise>
+					</camel:choice>
+				</camel:otherwise>
+			</camel:choice>
+
+		</camel:route>
+
+		<!-- 1. This route checks whether input is from core or from sfmc depending 
+			on triggerSource 1.1 if it is from core forwarded to registerContact for 
+			updating contact policy. If the response is http success code then forwarded 
+			to smsAPIRoute 1.2 otherwise it is from SFMC then forwarded to registerContact 
+			for contact policy check. If the result of the response body contains sms=true 
+			then routed to smsAPIRoute -->
+		<camel:route id="contactPolicyCheckRoute" startupOrder="5">
+			<camel:from
+				uri="seda:contactPolicyCheck?size={{env:SEDA_CONTACT_POLICY_SIZE}}&amp;concurrentConsumers={{env:SEDA_CONTACT_POLICY_CONSUMERS}}" />
+			<camel:onException>
+				<camel:exception>org.apache.camel.http.common.HttpOperationFailedException</camel:exception>
+				<camel:onWhen>
+					<camel:simple>${exception.statusCode} != 200  || ${exception.statusCode} != 202 </camel:simple>
+				</camel:onWhen>
+				<camel:redeliveryPolicy
+					maximumRedeliveries="3" redeliveryDelay="5000"
+					backOffMultiplier="4" retryAttemptedLogLevel="WARN"
+					logRetryAttempted="true" />
+				<camel:handled>
+					<camel:constant>true</camel:constant>
+				</camel:handled>
+				<camel:setHeader headerName="HttpStatusCode">
+					<camel:simple>${exception.statusCode}</camel:simple>
+				</camel:setHeader>
+				<camel:log loggingLevel="ERROR"
+					message="HttpResponse : body -> ${body} - headers -> ${headers}" />
+			</camel:onException>
+			<camel:choice>
+				<camel:when>
+					<camel:simple>${body[triggerSource]} == "{{env:TRIGGER_SOURCE_CORE}}"</camel:simple>
+					<camel:log loggingLevel="INFO"
+						message="Message received from core" />
+					<!-- if countAsContact from core is N we are not supposed to update 
+						contact policy in core> -->
+					<!-- <camel:when> <camel:simple>${body[countAsContact]} == "Y"</camel:simple> 
+						<camel:setHeader headerName="countAsContact"> <camel:simple>inr</camel:simple> 
+						</camel:setHeader> -->
+					<camel:choice>
+						<camel:when>
+							<camel:simple>${body[action]} != "FULFILLNOTIFY" and ${body[action]} != "COREFULFILMENT"</camel:simple>
+							<camel:choice>
+								<camel:when>
+									<camel:simple>{{env:ENABLE_REGISTER_CONTACT}} == "true"</camel:simple>
+									<camel:to uri="direct:registerContact" />
+									<camel:choice>
+										<camel:when>
+											<camel:simple>${headers.CamelHttpResponseCode} in {{so.sms.successCodes}}</camel:simple>
+											<camel:setBody>
+												<camel:simple>${property.OriginalMessage}</camel:simple>
+											</camel:setBody>
+											<camel:to
+												uri="seda:aggregate?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+											<!-- <camel:to uri="seda:sendSMSRequest?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" 
+												/> -->
+										</camel:when>
+									</camel:choice>
+								</camel:when>
+								<camel:otherwise>
+									<camel:log loggingLevel="INFO"
+										message="Register Contact to GW has been disabled. Sending SMS" />
+									<camel:setBody>
+										<camel:simple>${property.OriginalMessage}</camel:simple>
+									</camel:setBody>
+									<camel:to
+										uri="seda:aggregate?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+									<!-- <camel:to uri="seda:sendSMSRequest?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" 
+										/> -->
+								</camel:otherwise>
+							</camel:choice>
+						</camel:when>
+						<camel:otherwise>
+							<camel:log loggingLevel="INFO"
+								message="This is a Fulfillment Notification. Sending SMS" />
+							<camel:setBody>
+								<camel:simple>${property.OriginalMessage}</camel:simple>
+							</camel:setBody>
+							<camel:to
+								uri="seda:aggregate?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+							<!-- <camel:to uri="seda:sendSMSRequest?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" 
+								/> -->
+						</camel:otherwise>
+					</camel:choice>
+					<!-- </camel:when> <camel:otherwise> <camel:to uri="seda:sendSMSRequest?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" 
+						/> </camel:otherwise> -->
+				</camel:when>
+				<camel:when>
+					<camel:simple>${body[triggerSource]} == "{{env:TRIGGER_SOURCE_SFMC}}"</camel:simple>
+					<camel:log loggingLevel="INFO"
+						message="Message received from SFMC" />
+					<!-- <camel:setHeader headerName="countAsContact"> <camel:simple>N</camel:simple> 
+						</camel:setHeader> -->
+					<camel:choice>
+						<camel:when>
+							<camel:simple>{{env:ENABLE_REGISTER_CONTACT}} == "true"</camel:simple>
+							<camel:to uri="direct:registerContact" />
+							<camel:choice>
+								<camel:when>
+									<camel:simple>${body[result]} != null and ${body[result][contactable][sms]} == true</camel:simple>
+									<camel:setBody>
+										<camel:simple>${property.OriginalMessage}</camel:simple>
+									</camel:setBody>
+									<camel:to
+										uri="seda:aggregate?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+									<!-- <camel:to uri="seda:sendSMSRequest?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" 
+										/> -->
+								</camel:when>
+								<camel:otherwise>
+									<camel:log loggingLevel="WARN"
+										message="Contact policy exceeded" />
+								</camel:otherwise>
+							</camel:choice>
+						</camel:when>
+						<camel:otherwise>
+							<camel:log loggingLevel="INFO"
+								message="Register Contact to GW has been disabled. Sending SMS" />
+							<camel:setBody>
+								<camel:simple>${property.OriginalMessage}</camel:simple>
+							</camel:setBody>
+							<camel:to
+								uri="seda:aggregate?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+						</camel:otherwise>
+					</camel:choice>
+				</camel:when>
+			</camel:choice>
+		</camel:route>
+		
+		
+
+		<camel:route id="aggregateRoute">
+			<camel:from uri="seda:aggregate" />
+			<camel:setProperty propertyName="SMSRequestBody">
+					<camel:simple>${body}</camel:simple>
+			</camel:setProperty>
+			<camel:bean ref="authToken" id="checkTokenExpiryDe" method="checkTokenExpiry" />
+			<camel:choice>
+				<camel:when>
+					<camel:simple>${header.isTokenExpired} == true</camel:simple>
+					<camel:removeHeaders pattern="Camel*" />
+					<camel:to uri="direct:getAUTHToken" />
+				</camel:when>
+			</camel:choice>
+			<camel:to uri="direct:sfmcDeAPIRoute" />
+			<camel:choice>
+			    <camel:when>
+			    	<camel:simple>${header.deSuccess}</camel:simple>	
+					<!-- <camel:unmarshal ref="json" /> -->
+					<camel:log loggingLevel="INFO"
+						message="In Aggregated route-> ${body}" />
+					<camel:bean ref="sfmcMessagingProcessor"
+						id="checkMessageDefKey" method="checkMessageDefKey" />
+					<camel:aggregate strategyRef="aggregatorStrategy">
+						<camel:correlationExpression>
+							<camel:simple>${body[messageDefinitionKey]}</camel:simple>
+						</camel:correlationExpression>
+						<!-- read aggregation attributes from properties file -->
+						<camel:completionTimeout>
+							<camel:simple>{{env:AGGREGATION_COMPLETION_TIMEOUT}}</camel:simple>
+						</camel:completionTimeout>
+						<camel:completionSize>
+							<camel:simple>{{env:AGGREGATION_COMPLETION_SIZE}}</camel:simple>
+						</camel:completionSize>
+						<camel:log loggingLevel="INFO"
+							message="Aggregated messages:headers ->${headers}" />
+						<camel:log loggingLevel="DEBUG"
+							message="Aggregated messages : body -> ${body} and headers ->${headers}" />
+						<camel:setProperty
+							propertyName="AggregatedMessage">
+							<camel:simple>${body}</camel:simple>
+						</camel:setProperty>
+						<!-- Invoke freemarker template -->
+						<camel:to
+							uri="freemarker:file:{{so.sms.req.template.path}}" />
+						<camel:setProperty propertyName="SMSRequestBody">
+							<camel:simple>${body}</camel:simple>
+						</camel:setProperty>
+						<camel:log loggingLevel="DEBUG"
+							message="The body after ftl : ${body}" />
+						<camel:to
+							uri="seda:sendSMSRequest?size={{env:SEDA_SMSAPI_SIZE}}&amp;waitForTaskToComplete=Never&amp;blockWhenFull=true" />
+					</camel:aggregate>
+				</camel:when>
+			</camel:choice>
+		</camel:route>
+		
+		<camel:route id="sfmcDeAPIRoute">
+			<camel:from uri="direct:sfmcDeAPIRoute" />
+			<camel:choice>
+			    <camel:when>
+			    	<camel:simple>{{env:ENABLE_DE_INGESTION}} == "true"</camel:simple>
+					<camel:removeHeaders pattern="*" excludePattern="Content-Type" />
+					<camel:bean ref="authToken" id="setdeAPIHeaders" method="setAPIHeaders" />
+					<camel:unmarshal ref="json" />
+					<camel:log loggingLevel="DEBUG" message="Body to DE freemarker template : body -> ${body} - headers -> ${headers}" />
+					<camel:to uri="freemarker:file:{{so.deingestion.api.req.template.path}}" />
+					<camel:log loggingLevel="INFO" message="Invoking SFMC DE API : body -> ${body}" />
+					<camel:toD uri="https4://${header.RestURL}{{env:INGESTION_REQUEST_URL_PATH}}" />
+					<camel:log loggingLevel="INFO" message="The response received after SFMC DE API request-> ${body}" />
+					<camel:unmarshal ref="json" />
+					<camel:bean ref="ingestDEProcessor" id="processAPIResponse" method="processAPIResponse" />
+					<camel:choice>
+		   				<camel:when>
+		    				<camel:simple>${header.deSuccess} == "false"</camel:simple>
+		    				<camel:to uri="seda:dbRoute?waitForTaskToComplete=Never" />
+		   				</camel:when>						
+					</camel:choice>					
+			   </camel:when>
+			</camel:choice>		
+		</camel:route>
+		
+		<!-- 1. Throttle messages by setting the maximum number of requests per 
+			second as x, where x is configurable in properties 2. Invoke freemarker template 
+			for preparing sms request 3. Set following headers for API call 3.1 Authorization: 
+			Bearer <<access_Token>> 3.2 RestURL: https://<HOSTNAME>>/ 4. Invoke SFMSC 
+			Messaging API. Where url will be from header RestURL and path will be configurable 
+			in environment 5. Send to dbLoggingRoute for success and failure responses 
+			6. Check for responseCode received. 6.1 If failure send to registerContactRoute 
+			for updating the contact policy -->
+		<camel:route id="smsAPIRoute" startupOrder="6">
+			<camel:from
+				uri="seda:sendSMSRequest?size={{env:SEDA_SMSAPI_SIZE}}&amp;concurrentConsumers={{env:SEDA_SMSAPI_CONCURRENT_CONSUMERS}}" />
+			<camel:onException>
+				<camel:exception>org.apache.camel.http.common.HttpOperationFailedException</camel:exception>
+				<camel:onWhen>
+					<camel:simple>${exception.statusCode} == 403 || ${exception.statusCode} == 401 </camel:simple>
+				</camel:onWhen>
+				<camel:redeliveryPolicy
+					maximumRedeliveries="3" redeliveryDelay="5000"
+					backOffMultiplier="4" retryAttemptedLogLevel="WARN"
+					logRetryAttempted="true" />
+				<camel:handled>
+					<camel:constant>true</camel:constant>
+				</camel:handled>
+				<camel:setHeader headerName="HttpStatusCode">
+					<camel:simple>${exception.statusCode}</camel:simple>
+				</camel:setHeader>
+				<camel:log loggingLevel="ERROR"
+					message="HttpResponse : body -> ${body} - headers -> ${headers}" />
+				<camel:to uri="direct:getAUTHToken" />
+			</camel:onException>
+			<camel:onException>
+				<camel:exception>org.apache.camel.http.common.HttpOperationFailedException</camel:exception>
+				<camel:onWhen>
+					<camel:simple>${exception.statusCode} == 400 || ${exception.statusCode} == 500 </camel:simple>
+				</camel:onWhen>
+				<camel:handled>
+					<camel:constant>true</camel:constant>
+				</camel:handled>
+				<camel:setHeader headerName="HttpStatusCode">
+					<camel:simple>${exception.statusCode}</camel:simple>
+				</camel:setHeader>
+				<camel:log loggingLevel="ERROR"
+					message="HttpErrorResponse : ErrorCode -> ${exception.statusCode} : exceptionMsg -> ${exception.message} : body -> ${body} - headers -> ${headers}" />
+				<!-- <camel:unmarshal ref="json" /> <camel:bean ref="sfmcMessagingProcessor" 
+					id="processMessagingAPIResponse" method="processMessagingAPIResponse" /> 
+					<camel:log loggingLevel="INFO" message="After Processing Response: body -> 
+					${body} - headers -> ${headers}" /> <camel:to uri="direct:registerContact" 
+					/> -->
+			</camel:onException>
+			<camel:throttle timePeriodMillis="1000">
+				<camel:simple>{{sms.throttle}}</camel:simple>
+				<!--<camel:unmarshal ref="json" /> <camel:to uri="freemarker:file:{{so.sms.req.template.path}}" 
+					/> -->
+				<camel:bean ref="authToken" id="checkTokenExpiry"
+					method="checkTokenExpiry" />
+				<camel:choice>
+					<camel:when>
+						<camel:simple>${header.isTokenExpired} == true</camel:simple>
+						<camel:removeHeaders pattern="Camel*" />
+						<camel:to uri="direct:getAUTHToken" />
+					</camel:when>
+				</camel:choice>
+				<camel:bean ref="authToken" id="setAPIHeaders"
+					method="setAPIHeaders" />
+				<camel:removeHeaders pattern="kafka*" />
+				<camel:log loggingLevel="DEBUG"
+					message="Invoking SMS API service : body -> ${body} - headers -> ${headers}" />
+				<camel:toD
+					uri="https4://${header.RestURL}{{env:SMS_REQUEST_URL_PATH}}" />
+				<camel:log loggingLevel="INFO"
+					message="The response received after SMS request: body -> ${body} - headers -> ${headers}" />
+				<camel:setHeader headerName="HttpStatusCode">
+					<camel:simple>${header.CamelHttpResponseCode}</camel:simple>
+				</camel:setHeader>
+				<camel:unmarshal ref="json" />
+				<camel:bean ref="sfmcMessagingProcessor"
+					id="processMessagingAPIResponse"
+					method="processMessagingAPIResponse" />
+				<camel:log loggingLevel="DEBUG"
+					message="The body to db Logging -> ${body}" />
+				<camel:split>
+					<camel:simple>${body}</camel:simple>
+					<camel:to uri="seda:dbRoute?waitForTaskToComplete=Never" />
+					<camel:choice>
+						<camel:when>
+							<camel:simple>${body[status]} == "FAILURE"</camel:simple>
+							<camel:to uri="direct:registerContact" />
+						</camel:when>
+					</camel:choice>
+				</camel:split>
+			</camel:throttle>
+		</camel:route>
+
+		<!-- 1. Set auth request in body. This auth request should be in json format 
+			and config in properties. 2. Invoke authentication API. 3. Store auth token 
+			and rest url in variable. -->
+		<camel:route id="getAuthTokenRoute" startupOrder="1">
+			<camel:from uri="direct:getAUTHToken" />
+			<camel:setHeader headerName="Content-Type">
+				<camel:constant>application/json</camel:constant>
+			</camel:setHeader>
+			<camel:bean ref="authToken" id="getAuthTokenRequest" method="getAuthTokenRequest" />
+			<!-- <camel:log loggingLevel="DEBUG" message="Invoking AUTH service : 
+				body -> ${body} - headers -> ${headers}" /> -->
+			<camel:log loggingLevel="INFO"
+				message="Invoking AUTH service" />
+			<camel:to uri="https4://{{env:AUTH_REQUEST_URL}}" />
+			<camel:unmarshal ref="json" />
+			<camel:log loggingLevel="TRACE"
+				message="Token received from AUTH API : body -> ${body} - headers -> ${headers}" />
+			<camel:log loggingLevel="INFO"
+				message="Token received from AUTH API" />
+			<camel:bean ref="authToken" id="setVariables"
+				method="setVariables" />
+			<camel:log loggingLevel="INFO"
+				message="Authentication token updated" />
+			<!-- setting this header 'HttpStatusCode' only when then there is Auth 
+				invalidate exception from Message API -->
+			<camel:choice>
+				<camel:when>
+					<camel:simple>${header.HttpStatusCode} || ${header.isTokenExpired} == true</camel:simple>
+					<camel:setBody>
+						<camel:simple>${property.SMSRequestBody}</camel:simple>
+					</camel:setBody>
+				</camel:when>
+			</camel:choice>
+		</camel:route>
+
+
+
+		<!-- 1. The following route consumes from seda, works async 2. Sending 
+			to DB queue -->
+		<camel:route id="dbLoggingRoute" startupOrder="7">
+			<camel:from uri="seda:dbRoute" />
+			<camel:to uri="freemarker:file:{{db.req.template.path}}" />
+			<camel:removeHeaders pattern="kafka*" />
+			<camel:log loggingLevel="INFO" message="Submit for database logging : body -> ${body} - headers -> ${headers}" />
+			<camel:to uri="kafka:{{so.db.topic}}?brokers={{env:SIFT_QUEUES}}" />
+		</camel:route>
+
+		<!-- 1. The following route consumes from seda, works async 2. Invoke a 
+			freemarker template to prepare the request for registerContact API 3. Invoke 
+			registerContact API and the gateway will send RA to core for contact policy 
+			check as well as for upadting the contact policy -->
+		<camel:route id="registerContactRoute" startupOrder="8">
+			<camel:from uri="direct:registerContact" />
+			<camel:onException>
+				<camel:exception>org.apache.camel.http.common.HttpOperationFailedException</camel:exception>
+				<camel:onWhen>
+					<camel:simple>${exception.statusCode} not in {{so.sms.successCodes}} </camel:simple>
+				</camel:onWhen>
+				<camel:redeliveryPolicy
+					maximumRedeliveries="3" redeliveryDelay="5000"
+					backOffMultiplier="4" retryAttemptedLogLevel="WARN"
+					logRetryAttempted="true" />
+				<camel:handled>
+					<camel:constant>true</camel:constant>
+				</camel:handled>
+				<camel:log loggingLevel="ERROR"
+					message="HttpResponse : body -> ${body} - headers -> ${headers}" />
+			</camel:onException>
+			<camel:to
+				uri="freemarker:file:{{so.register.contact.template.path}}" />
+			<camel:removeHeaders pattern="kafka*" />
+			<camel:removeHeaders pattern="X-*" />
+			<camel:log loggingLevel="INFO"
+				message="Message received in registerContact route: body -> ${body} - headers -> ${headers}" />
+			<camel:to
+				uri="http4://{{env:SMS_REGISTER_CONTACT_REQUEST_URL}}" />
+			<camel:log loggingLevel="INFO"
+				message="Message received after invoking registerContact API: body -> ${body} - headers -> ${headers}" />
+			<camel:unmarshal ref="json" />
+		</camel:route>
+
+		<!-- 1. This is the first route that is invoked, timer component to schedule 
+			tasks to occur at a specified time(i.e, here when the handler starts). 2. 
+			Send to getAUTHToken Route -->
+		<camel:route id="initializeAuthTokenRouteFirst"
+			startupOrder="2">
+			<camel:from uri="timer://initializeToken?repeatCount=1" />
+			<camel:log loggingLevel="INFO"
+				message="Initializing authentication token" />
+			<camel:to uri="direct:getAUTHToken" />
+		</camel:route>
+
+	</camel:camelContext>
+</beans>
