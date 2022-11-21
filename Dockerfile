@@ -13,4 +13,6 @@ COPY target/sfmc-smshandler-exec/flow $SO_HOME/flow
 
 WORKDIR $SO_HOME
 
+RUN PWD
+
 CMD ["bin/sfmc-smshandler.sh","start"]
