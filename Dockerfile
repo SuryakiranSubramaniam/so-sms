@@ -2,6 +2,7 @@ FROM knowesis/so:base
 
 ENV $SO_HOME /opt/knowesis/sift/orchestrator
 
+ENV AUTO_OFFSET_RESET=latest
 
 COPY target/sfmc-smshandler-exec/bin  $SO_HOME/bin/
 
