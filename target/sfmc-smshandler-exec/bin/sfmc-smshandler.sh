@@ -9,7 +9,7 @@
 #handler_version :0.0.1-release
 # ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-#source ./so-env.sh
+source /opt/knowesis/sift/orchestrator/bin/so-env.sh
 
 : "${JAVA_HOME?JAVA_HOME not set}"
 : "${SO_HOME?SO_HOME not set}"
