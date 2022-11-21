@@ -2,7 +2,6 @@ FROM knowesis/so:base
 
 ENV $SO_HOME /opt/knowesis/sift/orchestrator
 
-ENV $SO_SMS_INPUT_TOPIC so.sms.in
 
 COPY target/sfmc-smshandler-exec/bin  $SO_HOME/bin/
 
